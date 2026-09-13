@@ -1,0 +1,616 @@
+generator client {
+  provider = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// AUTHENTICATION & AUTHORIZATION
+// ============================================
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  passwordHash  String?
+  image         String?
+  roleId        String    @default("viewer")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  role              Role              @relation(fields: [roleId], references: [id])
+  sessions          Session[]
+  accounts          Account[]
+  researchRuns      ResearchRun[]     @relation("RunCreator")
+  reviewedItems     ReviewQueueItem[] @relation("ReviewAssignee")
+  auditLogs         AuditLog[]
+  usageMetrics      UsageMetric[]
+  apiTokens         ApiToken[]
+  browserClipperTokens BrowserClipperToken[]
+
+  @@map("users")
+}
+
+model Role {
+  id          String       @id @default(cuid())
+  name        String       @unique // admin, researcher, viewer
+  description String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  users       User[]
+  permissions Permission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String   @id @default(cuid())
+  name        String   @unique // manage_users, manage_settings, create_run, etc.
+  description String?
+  createdAt   DateTime @default(now())
+
+  roles Role[]
+
+  @@map("permissions")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+// ============================================
+// FEATURE FLAGS & SETTINGS
+// ============================================
+
+model AppSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String   @db.Text
+  isSecret  Boolean  @default(false)
+  updatedAt DateTime @updatedAt
+
+  @@map("app_settings")
+}
+
+model FeatureFlag {
+  id          String   @id @default(cuid())
+  name        String   @unique // visionAnalysis, backgroundJobs, semanticSearch, etc.
+  enabled     Boolean  @default(false)
+  description String?
+  updatedAt   DateTime @updatedAt
+
+  @@map("feature_flags")
+}
+
+// ============================================
+// PROJECTS & RESEARCH
+// ============================================
+
+model Project {
+  id               String          @id @default(cuid())
+  name             String
+  projectType      String?
+  location         String?
+  brandContext     String?
+  scaleNotes       String?
+  targetCompletion DateTime?
+  constraints      String?
+  notes            String?
+  templateId       String?
+  isArchived       Boolean         @default(false)
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  template         TypologyTemplate? @relation(fields: [templateId], references: [id])
+  researchRuns     ResearchRun[]
+  reviewQueueItems ReviewQueueItem[]
+  duplicateClusters DuplicateCluster[] @relation("ProjectDuplicates")
+
+  @@map("projects")
+}
+
+model TypologyTemplate {
+  id                    String   @id @default(cuid())
+  name                  String
+  projectType           String   // hotel, workplace, retail, hospitality, healthcare, education
+  defaultFacets         Json     // Array of facet keys
+  defaultHints          Json     // Default hints object
+  recommendedMetrics    Json     // Recommended comparison metrics
+  recommendedSourceTypes Json   // Recommended source types
+  reportSectionEmphasis Json   // Report section emphasis
+  defaultLimits         Json     // Default limits
+  isArchived            Boolean  @default(false)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  projects Project[]
+
+  @@map("typology_templates")
+}
+
+model ResearchRun {
+  id              String   @id @default(cuid())
+  projectId       String
+  creatorId       String
+  status          String   @default("draft") // draft, intake, search, shortlist_approval, retrieval, extraction, vision_analysis, comparison, review, report, completed, error
+  hints           Json?    // Directional hints: brand, location, typology, scale, budget band, named precedents, notes
+  selectedFacets  Json     // Array of selected facet keys
+  templateId      String?
+  maxPrecedents   Int      @default(5)
+  maxSources      Int      @default(3)
+  maxAssets       Int      @default(10)
+  searchMode      String   @default("manual") // manual, automated, mixed
+  costEstimate    Decimal? @db.Decimal(10, 2)
+  actualCost      Decimal? @db.Decimal(10, 2)
+  errorMessage    String?
+  approvedAt      DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  project          Project          @relation(fields: [projectId], references: [id])
+  creator          User             @relation("RunCreator", fields: [creatorId], references: [id])
+  template         TypologyTemplate? @relation(fields: [templateId], references: [id])
+  precedentProjects PrecedentProject[]
+  evidenceSources  EvidenceSource[]
+  evidenceAssets   EvidenceAsset[]
+  comparisonEntries ComparisonEntry[]
+  estimateLogs     EstimateLog[]
+  promptLogs       PromptLog[]
+  usageMetrics     UsageMetric[]
+  runJobs          RunJob[]
+  reviewQueueItems ReviewQueueItem[]
+  exportedPdfs     ExportedPdf[]
+
+  @@map("research_runs")
+}
+
+model PrecedentProject {
+  id              String   @id @default(cuid())
+  runId           String
+  name            String
+  designer        String?
+  location        String?
+  completionYear  Int?
+  sourceUrl       String?
+  relevanceNote   String?
+  status          String   @default("candidate") // candidate, approved, rejected
+  confidence      Float?   @default(0.5)
+  sourceScore     Int?     @default(50)
+  isDuplicate     Boolean  @default(false)
+  duplicateClusterId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  run              ResearchRun     @relation(fields: [runId], references: [id])
+  evidenceSources  EvidenceSource[]
+  evidenceAssets   EvidenceAsset[]
+  comparisonEntries ComparisonEntry[]
+  extractionRecords ExtractionRecord[]
+  duplicateCluster DuplicateCluster? @relation(fields: [duplicateClusterId], references: [id], map: "fk_precedent_duplicate_cluster")
+
+  @@map("precedent_projects")
+}
+
+// ============================================
+// FACETS
+// ============================================
+
+model Facet {
+  id          String   @id @default(cuid())
+  key         String   @unique // spatial_composition, material_palette, etc.
+  label       String
+  description String?
+  isActive    Boolean  @default(true)
+  isSelectedByDefault Boolean @default(false)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  facetSelections FacetSelection[]
+  extractionRecords ExtractionRecord[]
+  comparisonEntries ComparisonEntry[]
+
+  @@map("facets")
+}
+
+model FacetSelection {
+  id        String @id @default(cuid())
+  runId     String
+  facetKey  String
+  isSelected Boolean @default(true)
+
+  run   ResearchRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  facet Facet       @relation(fields: [facetKey], references: [key])
+
+  @@unique([runId, facetKey])
+  @@map("facet_selections")
+}
+
+// ============================================
+// EVIDENCE
+// ============================================
+
+model EvidenceSource {
+  id              String   @id @default(cuid())
+  runId           String?
+  precedentId     String?
+  url             String
+  publisher       String?
+  title           String?
+  accessDate      DateTime @default(now())
+  sourceType      String   // webpage, pdf, image, document
+  sourceQualityScore Int?  @default(50)
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  run         ResearchRun?     @relation(fields: [runId], references: [id])
+  precedent   PrecedentProject? @relation(fields: [precedentId], references: [id])
+  assets      EvidenceAsset[]
+  sourceScores SourceScore[]
+  reviewQueueItems ReviewQueueItem[]
+
+  @@map("evidence_sources")
+}
+
+model EvidenceAsset {
+  id              String   @id @default(cuid())
+  runId           String?
+  precedentId     String?
+  sourceId        String?
+  localPath       String
+  fileType        String   // image, pdf, floorplan, document
+  assetType       String   // image, floorplan, document
+  creditLine      String?
+  sourceUrl       String?
+  verificationStatus String @default("pending") // pending, verified, unverified
+  reviewStatus    String   @default("none") // none, flagged, resolved
+  perceptualHash  String?
+  embeddingStatus String   @default("pending") // pending, processed, failed
+  thumbnailPath   String?
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  run         ResearchRun?     @relation(fields: [runId], references: [id])
+  precedent   PrecedentProject? @relation(fields: [precedentId], references: [id])
+  source      EvidenceSource?  @relation(fields: [sourceId], references: [id])
+  embeddings  AssetEmbedding[]
+  visionInsights VisionInsight[]
+  reviewQueueItems ReviewQueueItem[]
+  duplicateClusters DuplicateCluster[] @relation("AssetDuplicates")
+
+  @@map("evidence_assets")
+}
+
+model AssetEmbedding {
+  id        String   @id @default(cuid())
+  assetId   String
+  embedding Bytes    // Stored as binary for pgvector compatibility
+  chunkText String   @db.Text
+  chunkIndex Int
+  createdAt DateTime @default(now())
+
+  asset EvidenceAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@map("asset_embeddings")
+}
+
+model VisionInsight {
+  id                 String   @id @default(cuid())
+  assetId            String
+  materials          Json?    // Array of materials
+  colours            Json?    // Array of colours
+  furnitureCategories Json?   // Array of furniture categories
+  lightingObservations String? @db.Text
+  spatialObservations String? @db.Text
+  confidence         Float?   @default(0.5)
+  modelUsed          String?
+  needsReview        Boolean  @default(false)
+  createdAt          DateTime @default(now())
+
+  asset EvidenceAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@map("vision_insights")
+}
+
+model SourceScore {
+  id              String   @id @default(cuid())
+  sourceId        String
+  score           Int      // 0-100
+  factors         Json     // Scoring factors breakdown
+  weightedExplanation String? @db.Text
+  createdAt       DateTime @default(now())
+
+  source EvidenceSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@map("source_scores")
+}
+
+// ============================================
+// EXTRACTION & COMPARISON
+// ============================================
+
+model ExtractionRecord {
+  id          String   @id @default(cuid())
+  precedentId String
+  facetKey    String
+  fieldName   String
+  value       String   @db.Text
+  status      String   // observed, estimated, unverified
+  method      String?  // extraction, estimation, manual
+  citationSourceId String?
+  confidence  Float?   @default(0.5)
+  needsReview Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  precedent      PrecedentProject @relation(fields: [precedentId], references: [id])
+  facet          Facet            @relation(fields: [facetKey], references: [key])
+  citationSource EvidenceSource?  @relation(fields: [citationSourceId], references: [id])
+  estimateLogs   EstimateLog[]
+  reviewQueueItems ReviewQueueItem[]
+
+  @@map("extraction_records")
+}
+
+model ComparisonEntry {
+  id          String   @id @default(cuid())
+  runId       String
+  precedentId String?
+  facetKey    String
+  metricName  String
+  baselineValue String? @db.Text
+  precedentValue String? @db.Text
+  pattern     String?  // common, different, gap
+  notes       String?
+  createdAt   DateTime @default(now())
+
+  run       ResearchRun      @relation(fields: [runId], references: [id])
+  precedent PrecedentProject? @relation(fields: [precedentId], references: [id])
+  facet     Facet            @relation(fields: [facetKey], references: [key])
+
+  @@map("comparison_entries")
+}
+
+model EstimateLog {
+  id              String   @id @default(cuid())
+  extractionId    String
+  estimatedValue  String   @db.Text
+  ratioUsed       String?
+  rationale       String?  @db.Text
+  confidence      Float?   @default(0.5)
+  needsReview     Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  extraction ExtractionRecord @relation(fields: [extractionId], references: [id])
+
+  @@map("estimate_logs")
+}
+
+// ============================================
+// REVIEW QUEUE
+// ============================================
+
+model ReviewQueueItem {
+  id          String   @id @default(cuid())
+  runId       String?
+  itemType    String   // extraction, floorplan, conflict, estimate, duplicate, vision
+  relatedEntityId String // ID of the related entity
+  relatedEntityType String // extraction_record, evidence_asset, evidence_source, precedent_project
+  reason      String
+  priority    String   @default("medium") // low, medium, high
+  assigneeId  String?
+  status      String   @default("pending") // pending, approved, rejected, merged, resolved
+  resolution  String?  @db.Text
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  run              ResearchRun?     @relation(fields: [runId], references: [id])
+  assignee         User?            @relation("ReviewAssignee", fields: [assigneeId], references: [id])
+  extractionRecord ExtractionRecord? @relation(fields: [relatedEntityId], references: [id], onDelete: Cascade)
+  evidenceSource   EvidenceSource?  @relation(fields: [relatedEntityId], references: [id], onDelete: Cascade)
+  evidenceAsset    EvidenceAsset?   @relation(fields: [relatedEntityId], references: [id], onDelete: Cascade)
+  project          Project?         @relation(fields: [relatedEntityId], references: [id], onDelete: Cascade)
+
+  @@map("review_queue_items")
+}
+
+// ============================================
+// DUPLICATES
+// ============================================
+
+model DuplicateCluster {
+  id          String   @id @default(cuid())
+  clusterType String   // precedent, asset, source
+  confidence  Float    @default(0.5)
+  isMerged    Boolean  @default(false)
+  mergeDecision String? // keep_first, keep_both, reject
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  precedentProjects PrecedentProject[] @relation("PrecedentDuplicates")
+  evidenceAssets    EvidenceAsset[]    @relation("AssetDuplicateClusters")
+  projects          Project[]          @relation("ProjectDuplicates")
+
+  @@map("duplicate_clusters")
+}
+
+// ============================================
+// JOBS & EXPORTS
+// ============================================
+
+model RunJob {
+  id        String   @id @default(cuid())
+  runId     String
+  queueName String   // research.run, download.asset, vision.analyse, embed.asset, pdf.generate, duplicate.scan, cost.refresh
+  jobId     String
+  status    String   @default("pending") // pending, processing, completed, failed
+  attempts  Int      @default(0)
+  error     String?
+  result    Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  run ResearchRun @relation(fields: [runId], references: [id])
+
+  @@unique([jobId])
+  @@map("run_jobs")
+}
+
+model ExportedPdf {
+  id        String   @id @default(cuid())
+  runId     String
+  localPath String
+  fileSize  Int?
+  createdAt DateTime @default(now())
+
+  run ResearchRun @relation(fields: [runId], references: [id])
+
+  @@map("exported_pdfs")
+}
+
+// ============================================
+// PROMPT LOGGING & USAGE METRICS
+// ============================================
+
+model PromptLog {
+  id             String   @id @default(cuid())
+  runId          String?
+  purpose        String   // planner, extractor, comparator, vision_analyser, report_writer, embedding
+  model          String
+  requestSummary String?  @db.Text
+  responseSummary String? @db.Text
+  promptTokens   Int?
+  completionTokens Int?
+  totalTokens    Int?
+  latencyMs      Int?
+  error          String?
+  cost           Decimal? @db.Decimal(10, 4)
+  createdAt      DateTime @default(now())
+
+  run ResearchRun? @relation(fields: [runId], references: [id])
+
+  @@map("prompt_logs")
+}
+
+model UsageMetric {
+  id             String   @id @default(cuid())
+  date           DateTime @db.Date
+  userId         String?
+  runId          String?
+  model          String
+  promptTokens   Int      @default(0)
+  completionTokens Int    @default(0)
+  totalTokens    Int      @default(0)
+  estimatedCost  Decimal  @db.Decimal(10, 4)
+  createdAt      DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+  run  ResearchRun? @relation(fields: [runId], references: [id])
+
+  @@unique([date, userId, runId, model])
+  @@map("usage_metrics")
+}
+
+model ModelPrice {
+  id           String   @id @default(cuid())
+  modelName    String
+  inputPrice   Decimal  @db.Decimal(10, 6) // per 1K tokens
+  outputPrice  Decimal  @db.Decimal(10, 6) // per 1K tokens
+  currency     String   @default("USD")
+  effectiveDate DateTime @default(now())
+  createdAt    DateTime @default(now())
+
+  @@unique([modelName, effectiveDate])
+  @@map("model_prices")
+}
+
+// ============================================
+// TOKENS & AUDIT
+// ============================================
+
+model ApiToken {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  hashedToken String
+  scopes      Json     // Array of permission names
+  expiry      DateTime?
+  lastUsedAt  DateTime?
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("api_tokens")
+}
+
+model BrowserClipperToken {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  hashedToken String
+  expiry      DateTime?
+  lastUsedAt  DateTime?
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("browser_clipper_tokens")
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  userId      String?
+  action      String
+  entityType  String
+  entityId    String?
+  timestamp   DateTime @default(now())
+  changeSummary String? @db.Text
+  ipAddress   String?
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@map("audit_logs")
+}
+
+// ============================================
+// VECTOR EXTENSION
+// ============================================
+
+// Note: pgvector extension must be created manually or via migration
+// CREATE EXTENSION IF NOT EXISTS vector;

@@ -1,0 +1,37 @@
+```
+# Dependencies
+node_modules/
+
+# Build outputs
+.next/
+dist/
+build/
+out/
+
+# Environment variables
+.env.local
+.env.*
+
+# Logs
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+
+# Prisma
+prisma/migrations/
+prisma/schema.prisma.bak
+
+# Next.js
+.next/
+.cache/
+coverage/
+
+# TypeScript
+*.tsbuildinfo
+```
